@@ -1,91 +1,132 @@
+import streamlit as st
 import gspread
-import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+import pandas as pd
+from collections import Counter
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+import tempfile
+import json  # Pour charger le JSON depuis le fichier téléchargé
+import os
+from datetime import datetime
 
-# Authentification Google Sheets et Drive
-def get_credentials():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(
-        'C:\\Users\\savery.plasman\\Envol CLASSE\\credentials.json',
-        scope
-    )
-    return creds
+# === CONFIGURATION ===
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Lire les données depuis le Google Sheet
-def get_sheet_data(sheet_url):
-    creds = get_credentials()
-    client = gspread.authorize(creds)
-    sheet = client.open_by_url(sheet_url)
-    worksheet = sheet.get_worksheet(0)
-    data = worksheet.get_all_records()
-    return pd.DataFrame(data)
+# Dossier ID où tu souhaites enregistrer le fichier sur Google Drive
+FOLDER_ID = "1euVnfDZbsquY-iMZR7_GIeyA2_4zbKsq"  # A adapter si besoin
 
-# Extraire les classes
+# === FONCTIONS ===
+def extract_sheet_id(url):
+    """Extraire l'ID du Google Sheet à partir de son URL"""
+    if "/d/" in url:
+        return url.split("/d/")[1].split("/")[0]
+    return None
+
+def make_headers_unique(headers):
+    """Rendre les en-têtes uniques si nécessaire"""
+    count = Counter()
+    result = []
+    for h in headers:
+        h = h.strip()
+        if count[h] == 0:
+            result.append(h)
+        else:
+            result.append(f"{h}_{count[h]}")
+        count[h] += 1
+    return result
+
+def charger_dataframe_depuis_google_sheet(url, client):
+    """Charger les données depuis un Google Sheet"""
+    sheet_id = extract_sheet_id(url)
+    try:
+        sheet = client.open_by_key(sheet_id).sheet1
+        all_values = sheet.get_all_values()
+        headers = make_headers_unique(all_values[0])
+        data = all_values[1:]
+        df = pd.DataFrame(data, columns=headers)
+        return df
+    except Exception as e:
+        st.error(f"Erreur lors du chargement de la feuille : {e}")
+        return None
+
+def get_drive_service(creds):
+    """Retourne un service Google Drive authentifié"""
+    return build('drive', 'v3', credentials=creds)
+
+def create_spreadsheet_with_data(title, df_filtered, creds, folder_id=FOLDER_ID):
+    """Créer une feuille de calcul Google Sheets avec les données filtrées"""
+    try:
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
+        df_filtered.to_csv(temp_file.name, index=False)
+
+        metadata = {
+            'name': title,
+            'mimeType': 'application/vnd.google-apps.spreadsheet',
+            'parents': [folder_id]
+        }
+
+        media = MediaFileUpload(temp_file.name, mimetype='text/csv', resumable=True)
+        drive_service = get_drive_service(creds)
+        file = drive_service.files().create(body=metadata, media_body=media, fields='id').execute()
+        return file.get("id")
+
+    except Exception as e:
+        st.error(f"Erreur lors de la création de la feuille : {e}")
+        return None
+
 def get_classes(dataframe):
+    """Extraire les classes uniques du DataFrame"""
     return dataframe['Classe'].unique()
 
-# Filtrer les élèves selon la ou les classes
 def filter_data_by_class(dataframe, selected_classes):
+    """Filtrer les données selon les classes sélectionnées"""
     return dataframe[dataframe['Classe'].isin(selected_classes)]
 
-# Créer un nouveau fichier Sheet et le déplacer dans le bon dossier
-def create_new_sheet(dataframe, filename, folder_id):
-    creds = get_credentials()
-    client = gspread.authorize(creds)
-    
-    new_sheet = client.create(filename)
-    worksheet = new_sheet.get_worksheet(0)
-    worksheet.update([dataframe.columns.values.tolist()] + dataframe.values.tolist())
+# === Interface Streamlit ===
+st.title("Filtrer les données de classe et exporter")
 
-    # Récupérer l'ID du fichier nouvellement créé
-    file_id = new_sheet.id
+uploaded_file = st.file_uploader("Téléchargez votre fichier JSON de clé privée", type="json")
 
-    # Déplacer le fichier dans le bon dossier Drive
-    service = build('drive', 'v3', credentials=creds)
-    file = service.files().get(fileId=file_id, fields='parents').execute()
-    previous_parents = ",".join(file.get('parents'))
-    service.files().update(
-        fileId=file_id,
-        addParents=folder_id,
-        removeParents=previous_parents,
-        fields='id, parents'
-    ).execute()
+if uploaded_file is not None:
+    try:
+        # Charger le contenu du fichier JSON
+        creds_info = json.load(uploaded_file)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        client = gspread.authorize(creds)
 
-# ---- Programme principal ----
-if __name__ == '__main__':
-    # URL du fichier source
-    sheet_url = "https://docs.google.com/spreadsheets/d/1grfqH0rYRTRoE32OjUoh5pVCT9XWCXvEkRHU4KC2qVs/edit?usp=sharing"
+        url_sheet = st.text_input("🔗 Veuillez coller l'URL du fichier Google Sheet à traiter : ")
 
-    # ID du dossier Google Drive cible
-    folder_id = "1uKc0nx4XxvNQG3IdY-icz8gti5iPIg6U"
+        if url_sheet:
+            st.info("📥 Chargement du fichier Google Sheet...")
+            df = charger_dataframe_depuis_google_sheet(url_sheet, client)
 
-    # Charger les données
-    df = get_sheet_data(sheet_url)
+            if df is not None:
+                classes = get_classes(df)
+                selected_classes = st.multiselect("Sélectionnez les classes à exporter :", classes)
 
-    # Liste des classes
-    classes = get_classes(df)
-    print("Classes disponibles :")
-    for idx, cls in enumerate(classes):
-        print(f"{idx + 1}. {cls}")
+                if selected_classes:
+                    filtered_df = filter_data_by_class(df, selected_classes)
+                    st.success(f"✅ {len(filtered_df)} élèves sélectionnés.")
+                    st.dataframe(filtered_df.head())  # Aperçu des données
 
-    # Sélection par l'utilisateur
-    selection = input("Entrez les numéros des classes à sélectionner (séparés par des virgules) : ")
-    selected_classes = [classes[int(i.strip()) - 1] for i in selection.split(',')]
+                    nom_utilisateur = st.text_input("📝 Entrez un nom pour le fichier généré : ")
+                    if nom_utilisateur:
+                        horodatage = datetime.now().strftime("%Y-%m-%d_%Hh%M")
+                        nouveau_nom = f"{nom_utilisateur} - {horodatage}"
+                        st.info(f"📝 Nom du fichier final : {nouveau_nom}")
 
-    # Filtrer les données
-    filtered_df = filter_data_by_class(df, selected_classes)
+                        file_id = create_spreadsheet_with_data(nouveau_nom, filtered_df, creds)
 
-    # Nom du fichier à créer
-    base_name = input("Entrez le nom du fichier (sans extension) : ")
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    final_name = f"{base_name}_{timestamp}"
+                        if file_id:
+                            st.success(f"✅ Nouveau fichier créé : https://docs.google.com/spreadsheets/d/{file_id}")
+                            st.info(f"📁 Fichier enregistré dans le dossier Google Drive ID : {FOLDER_ID}")
 
-    # Création du fichier
-    create_new_sheet(filtered_df, final_name, folder_id)
+                else:
+                    st.warning("⚠️ Veuillez sélectionner au moins une classe.")
 
-    print(f"✅ Nouveau fichier créé : {final_name} dans le dossier Google Drive.")
+    except Exception as e:
+        st.error(f"Une erreur s'est produite lors du traitement : {e}")
+
+else:
+    st.warning("Veuillez télécharger votre fichier JSON de clé privée pour continuer.")
