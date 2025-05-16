@@ -9,6 +9,7 @@ import tempfile
 import json  # Pour charger le JSON depuis le fichier téléchargé
 import os
 from datetime import datetime
+import pytz
 
 # === CONFIGURATION ===
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -98,33 +99,36 @@ if uploaded_file is not None:
         url_sheet = st.text_input("🔗 Veuillez coller l'URL du fichier Google Sheet à traiter : ")
 
         if url_sheet:
-            st.info("📥 Chargement du fichier Google Sheet...")
-            df = charger_dataframe_depuis_google_sheet(url_sheet, client)
+        st.info("📥 Chargement du fichier Google Sheet...")
+        df = charger_dataframe_depuis_google_sheet(url_sheet, client)
 
-            if df is not None:
-                classes = get_classes(df)
-                selected_classes = st.multiselect("Sélectionnez les classes à exporter :", classes)
+        if df is not None:
+            classes = get_classes(df)
+            selected_classes = st.multiselect("Sélectionnez les classes à exporter :", classes)
 
-                if selected_classes:
-                    filtered_df = filter_data_by_class(df, selected_classes)
-                    st.success(f"✅ {len(filtered_df)} élèves sélectionnés.")
-                    st.dataframe(filtered_df.head())  # Aperçu des données
+            if selected_classes:
+                filtered_df = filter_data_by_class(df, selected_classes)
+                st.success(f"✅ {len(filtered_df)} élèves sélectionnés.")
+                st.dataframe(filtered_df.head())  # Aperçu des données
 
-                    nom_utilisateur = st.text_input("📝 Entrez un nom pour le fichier généré : ")
-                    if nom_utilisateur:
-                        horodatage = datetime.now().strftime("%Y-%m-%d_%Hh%M")
-                        nouveau_nom = f"{nom_utilisateur} - {horodatage}"
-                        st.info(f"📝 Nom du fichier final : {nouveau_nom}")
+                nom_utilisateur = st.text_input("📝 Entrez un nom pour le fichier généré : ")
+                if nom_utilisateur:
+                    # Utiliser pytz pour ajuster le fuseau horaire
+                    fuseau_horaire_local = pytz.timezone('Europe/Paris')  # À adapter à votre fuseau horaire local
+                    timestamp = pd.to_datetime("now", utc=True).tz_convert(fuseau_horaire_local).strftime("%Y-%m-%d_%Hh%M")
 
-                        file_id = create_spreadsheet_with_data(nouveau_nom, filtered_df, creds)
+                    # Générer le nom du fichier avec la date et l'heure locale
+                    nouveau_nom = f"{nom_utilisateur} - {timestamp}"
+                    st.info(f"📝 Nom du fichier final : {nouveau_nom}")
 
-                        if file_id:
-                            st.success(f"✅ Nouveau fichier créé : https://docs.google.com/spreadsheets/d/{file_id}")
-                            st.info(f"📁 Fichier enregistré dans le dossier Google Drive ID : {FOLDER_ID}")
+                    file_id = create_spreadsheet_with_data(nouveau_nom, filtered_df, creds)
 
-                else:
-                    st.warning("⚠️ Veuillez sélectionner au moins une classe.")
+                    if file_id:
+                        st.success(f"✅ Nouveau fichier créé : https://docs.google.com/spreadsheets/d/{file_id}")
+                        st.info(f"📁 Fichier enregistré dans le dossier Google Drive ID : {FOLDER_ID}")
 
+            else:
+                st.warning("⚠️ Veuillez sélectionner au moins une classe.")
     except Exception as e:
         st.error(f"Une erreur s'est produite lors du traitement : {e}")
 
