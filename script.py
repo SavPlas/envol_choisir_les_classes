@@ -85,7 +85,7 @@ def filter_data_by_class(dataframe, selected_classes):
     return dataframe[dataframe['Classe'].isin(selected_classes)]
 
 # === Interface Streamlit ===
-st.title("Filtrer les données de classe et exporter")
+st.title("ENVOL : choix des classes")
 
 uploaded_file = st.file_uploader("Téléchargez votre fichier JSON de clé privée", type="json")
 
